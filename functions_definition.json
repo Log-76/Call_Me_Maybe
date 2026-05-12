@@ -3,6 +3,7 @@
 	"description": "Add two numbers together and return their sum.",
 	"parameters": {
 		"a": {"type": "numbers"},
-		"b": {"type":"numbers"}
+		"b": {"type":"numbers"},
+		"return": "numbers"
 	}
 }
