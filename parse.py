@@ -14,7 +14,18 @@ class Parse(BaseModel):
         except FileNotFoundError:
             print("error file not found")
         except json.JSONDecodeError as e:
-            print(e)
+            print(e.msg)
+        except Exception:
+            print("error")
+
+    def fonction_input(self):
+        try:
+            with open(self.input_file, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            print("error file not found")
+        except json.JSONDecodeError as e:
+            print(e.msg)
         except Exception:
             print("error")
 
