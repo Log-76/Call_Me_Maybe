@@ -62,7 +62,10 @@ install:
 	$(ECHO) ">>> Creating virtual environment …"
 	python3 -m venv $(VENV) && \
 	$(PIP) install --upgrade pip && \
-	$(PIP) install flake8 mypy
+	$(PIP) install flake8 mypy && \
+	$(PIP) install numpy && \
+	$(PIP) install uv && \
+	$(PIP) install pydantic 
 	$(ECHO) ">>> Done."
 
 # ------------------------------------------------------------
