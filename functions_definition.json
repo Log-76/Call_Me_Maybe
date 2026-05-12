@@ -33,7 +33,8 @@
 	{
 		"name": "fn_reverse_string",
 		"description": "Reverse a string and return the reversed result.",
-		"parameters": {
+		"parameters":
+		{
 			"s": 
 			{
 				"type": "string"
