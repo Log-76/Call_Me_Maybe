@@ -2,9 +2,9 @@ from pydantic import BaseModel, Field
 
 
 class Parse(BaseModel):
-    fonct: str = Field(strict=str)
-    input_file: str = Field(strict=str)
-    ouput_file: str = Field(strict=str)
+    fonct: str = Field(strict=True)
+    input_file: str = Field(strict=True)
+    ouput_file: str = Field(strict=True)
 
     def get_fonct(self):
         return self.fonct
