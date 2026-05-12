@@ -7,7 +7,7 @@ class Parse(BaseModel):
     input_file: str = Field(strict=True)
     ouput_file: str = Field(strict=True)
 
-    def fonction_def(self):
+    def fonction_def(self) -> str:
         try:
             with open(self.fonct, "r") as f:
                 return json.load(f)
@@ -18,7 +18,7 @@ class Parse(BaseModel):
         except Exception:
             print("error")
 
-    def fonction_input(self):
+    def fonction_input(self) -> str:
         try:
             with open(self.input_file, "r") as f:
                 return json.load(f)
@@ -29,11 +29,11 @@ class Parse(BaseModel):
         except Exception:
             print("error")
 
-    def get_fonct(self):
+    def get_fonct(self) -> str:
         return self.fonct
 
-    def get_input_file(self):
+    def get_input_file(self) -> str:
         return self.input_file
 
-    def get_ouput_file(self):
+    def get_ouput_file(self) -> str:
         return self.ouput_file
