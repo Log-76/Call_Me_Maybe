@@ -15,7 +15,8 @@ class DataContent_fonct(BaseModel):
     name: str
     description: str
     parameters: Any
-    returns: Any
+    returns: Any = Field(..., alias="return")
+    model_config = {"populate_by_name": True}
 
 
 class fonct_def(BaseModel):
@@ -30,7 +31,6 @@ class Parse(BaseModel):
     def fonction_def(self) -> list | dict | None:
         try:
             with open(self.fonct, "r") as f:
-                print(json.load(f))
                 data = json.load(f)
                 c = []
                 for i in data:
