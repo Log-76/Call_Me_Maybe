@@ -65,7 +65,7 @@ class Parse(BaseModel):
         return self.input_file
 
     def get_ouput_file(self) -> str:
-        return self.ouput_file
+        return self.output_file
 
 
 if __name__ == '__main__':
