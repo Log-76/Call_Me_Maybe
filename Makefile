@@ -6,6 +6,8 @@ VENV       := /tmp/.venv
 
 PYTHON     := /bin/python3
 PIP        := $(VENV)/bin/pip
+UV := /tmp/.venv/bin/uv
+DEF_ENV	:= UV_PROJECT_ENVIRONMENT=/tmp/.venv
 MAIN 	   :=
 CONFIG	   :=
 
@@ -60,13 +62,12 @@ help:
 
 install:
 	$(ECHO) ">>> Creating virtual environment …"
-	python3 -m venv $(VENV) && \
-	$(PIP) install --upgrade pip && \
-	$(PIP) install flake8 mypy && \
-	$(PIP) install uv && \
-	$(UV) pip install numpy && \
-	$(UV) pip install pydantic && \
-	$(UV) pip install pyproject
+	python3 -m venv $(VENV)
+	$(ECHO) ">>> Installing uv inside venv …"
+	$(PIP) install --upgrade pip
+	$(PIP) install uv
+	$(ECHO) ">>> Syncing dependencies with uv …"
+	UV_CACHE_DIR=/tmp/.uv-cache $(DEF_ENV) $(UV) sync
 	$(ECHO) ">>> Done."
 
 # ------------------------------------------------------------
