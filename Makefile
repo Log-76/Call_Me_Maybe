@@ -2,7 +2,7 @@
 #  VARIABLES
 # ============================================================
 
-VENV       := .venv
+VENV       := /tmp/.venv
 
 PYTHON     := /bin/python3
 PIP        := $(VENV)/bin/pip
@@ -63,9 +63,10 @@ install:
 	python3 -m venv $(VENV) && \
 	$(PIP) install --upgrade pip && \
 	$(PIP) install flake8 mypy && \
-	$(PIP) install numpy && \
 	$(PIP) install uv && \
-	$(PIP) install pydantic 
+	$(UV) pip install numpy && \
+	$(UV) pip install pydantic && \
+	$(UV) pip install pyproject
 	$(ECHO) ">>> Done."
 
 # ------------------------------------------------------------

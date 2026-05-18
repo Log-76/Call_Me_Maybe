@@ -13,7 +13,10 @@
 				"type":"number"
 			}
 		},
-		"returns": "number"
+		"returns":
+		{
+			"type": "number"
+		}
 	},
 	{
 		"name": "fn_greet",

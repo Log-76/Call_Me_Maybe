@@ -15,7 +15,7 @@ class DataContent_fonct(BaseModel):
     name: str
     description: str
     parameters: Any
-    returns: Any = Field(..., alias="return")
+    returns: Any
     model_config = {"populate_by_name": True}
 
 
@@ -69,7 +69,7 @@ class Parse(BaseModel):
 
 
 if __name__ == '__main__':
-    c = c = Parse(
+    c = Parse(
         fonct="functions_definition.json",
         input_file="function_calling_tests.json",
         output_file="function_calls.json")
