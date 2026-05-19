@@ -105,6 +105,7 @@ clean:
 	$(FIND) . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	$(ECHO) "$(YELLOW)>>> Cleaning *.egg-info$(RESET)"
 	$(FIND) . -type d -name "*.egg-info"    -exec rm -rf {} + 2>/dev/null || true
+	$(UV_CACHE_DIR) -delete  2>/dev/null || true
 	$(ECHO) "$(CYAN)>>> Done.$(RESET)"
 
 # ------------------------------------------------------------

@@ -64,13 +64,5 @@ class Parse(BaseModel):
     def get_input_file(self) -> str:
         return self.input_file
 
-    def get_ouput_file(self) -> str:
+    def get_output_file(self) -> str:
         return self.output_file
-
-
-if __name__ == '__main__':
-    c = Parse(
-        fonct="functions_definition.json",
-        input_file="function_calling_tests.json",
-        output_file="function_calls.json")
-    print(c.fonction_def())
