@@ -12,6 +12,7 @@ def main() -> None:
                  input_file="function_calling_tests.json",
                  output_file="function_calls.json")
     prompth = file.fonction_input()
+    fonct = file.fonction_def()
     for i in prompth:
         input_ids = ia.encode(i["prompt"]).tolist()[0]
 
