@@ -10,7 +10,7 @@ import torch
 
 def main() -> None:
     # 1. Initialisation du modèle et du gestionnaire de fichiers
-    ia = Small_LLM_Model("Qwen/Qwen2.5-0.5B")
+    ia = Small_LLM_Model("Qwen/Qwen3-0.6B")
     file = Parse(fonct="functions_definition.json",
                  input_file="function_calling_tests.json",
                  output_file="function_calls.json")
@@ -18,157 +18,173 @@ def main() -> None:
     prompth = file.fonction_input()
     fonct = file.fonction_def()
 
-    # Récupération de la liste des noms de fonctions disponibles
+    # Liste officielle des noms de fonctions (ex: ['fn_add_numbers',
+    # 'fn_greet', 'fn_reverse_string'])
     noms_fonct = [f.data_fonct.name for f in fonct]
 
     resultats_json = []
-    # 2. Boucle principale sur tes cas de tests
+
+    # 2. Boucle principale sur les requêtes utilisateur
     for i in prompth:
         print(f"\n--- Analyse de la requête : '{i['prompt']}' ---")
-        prompt_lower = i["prompt"].lower()
 
         # =====================================================================
-        # CAS 1 : Déclencheur "sum" -> Fonction fn_add_numbers
+        # PASSE 1 : Sélection de la fonction par Maximum de Vraisemblance
+        # (Séquence)
         # =====================================================================
-        if "sum" in prompt_lower:
-            nom_fonction = noms_fonct[0]
+        scores_fonctions = {}
 
-            # On isole tous les nombres complets (ex: ["265", "345"])
+        # On teste la probabilité de chaque
+        # nom de fonction complet dans le contexte
+        for f_name in noms_fonct:
+            prompt_base = (f"Analyze the request: '{i['prompt']}'."
+                           " The function to call is: ")
+            prompt_complet = prompt_base + f_name
+
+            # Encodage des deux séquences
+            ids_complet = ia.encode(prompt_complet).tolist()[0]
+            ids_base = ia.encode(prompt_base).tolist()[0]
+
+            # L'index où commence le nom de la fonction
+            idx_debut = len(ids_base)
+
+            # On fait la somme des logits uniquement sur
+            # les jetons du nom de la fonction
+            score_total = 0.0
+            # get_logits_from_input_ids renvoie les logits pour le DERNIER
+            # token de la liste fournie.
+            # Pour évaluer chaque jeton du nom de la fonction un par un :
+            for position in range(idx_debut, len(ids_complet)):
+                # On prend les ids jusqu'au jeton précédent
+                sous_sequence_ids = ids_complet[:position]
+                logits_etape = ia.get_logits_from_input_ids(sous_sequence_ids)
+
+                token_attendu = ids_complet[position]
+                logit_val = logits_etape[token_attendu]
+                if hasattr(logit_val, 'item'):
+                    logit_val = logit_val.item()
+                score_total += logit_val
+
+            scores_fonctions[f_name] = score_total
+
+        # L'Argmax choisit la fonction ayant obtenu le plus grand score combiné
+        nom_fonction = max(scores_fonctions, key=scores_fonctions.get)
+        print("-> Fonction sélectionnée par Constrained Scoring : "
+              f"{nom_fonction}")
+
+        # Dictionnaire pour stocker proprement les arguments extraits
+        arguments_extraits = {}
+
+        # =====================================================================
+        # PASSE 2 : Extraction contrainte des arguments
+        # =====================================================================
+
+        # --- CAS : fn_add_numbers ---
+        if nom_fonction == "fn_add_numbers":
             chiffres_trouves = [c.strip('?.') for c in i["prompt"].split()
                                 if c.strip('?.').isdigit()]
 
-            # --- Extraction du paramètre 'a' (Premier nombre) ---
-            prompt_a = (f"In the request '{i['prompt']}',"
-                        " what is the first number? Answer:")
-            input_ids_a = ia.encode(prompt_a).tolist()[0]
-            logits_a = ia.get_logits_from_input_ids(input_ids_a)
+            if len(chiffres_trouves) >= 2:
+                # Paramètre 'a'
+                prompt_a = (f"In the request '{i['prompt']}',"
+                            " what is the first number? Answer:")
+                logits_a = ia.get_logits_from_input_ids(
+                    ia.encode(prompt_a).tolist()[0])
+                scores_a = [-float('inf')] * len(logits_a)
+                for num in chiffres_trouves:
+                    t_id = ia.encode(num).tolist()[0][0]
+                    scores_a[t_id] = logits_a[t_id].item() if hasattr(
+                        logits_a[t_id], 'item') else logits_a[t_id]
+                id_gagnant_a = torch.tensor(scores_a).argmax().item()
+                valeur_a = next(int(num) for num in chiffres_trouves
+                                if ia.encode(num).tolist()[0][0] ==
+                                id_gagnant_a)
 
-            scores_a = [-float('inf')] * len(logits_a)
-            for num in chiffres_trouves:
-                token_id = ia.encode(num).tolist()[0][0]
-                scores_a[token_id] = logits_a[token_id]
+                # Paramètre 'b'
+                restants = [num for num in chiffres_trouves
+                            if int(num) != valeur_a] or chiffres_trouves
+                prompt_b = (f"In the request '{i['prompt']}',"
+                            " what is the second number? Answer:")
+                logits_b = ia.get_logits_from_input_ids(
+                    ia.encode(prompt_b).tolist()[0])
+                scores_b = [-float('inf')] * len(logits_b)
+                for num in restants:
+                    t_id = ia.encode(num).tolist()[0][0]
+                    scores_b[t_id] = logits_b[t_id].item() if hasattr(
+                        logits_b[t_id], 'item') else logits_b[t_id]
+                id_gagnant_b = torch.tensor(scores_b).argmax().item()
+                valeur_b = next(int(num) for num in restants
+                                if ia.encode(num).tolist()[0][0] ==
+                                id_gagnant_b)
+            else:
+                valeur_a, valeur_b = 0, 0
 
-            id_gagnant_a = torch.tensor(scores_a).argmax().item()
-            valeur_a = next(int(num) for num in chiffres_trouves
-                            if ia.encode(num).tolist()[0][0] == id_gagnant_a)
+            arguments_extraits = {"a": valeur_a, "b": valeur_b}
+            print(f"   Arguments : {arguments_extraits} "
+                  f"| Résultat : {valeur_a + valeur_b}")
 
-            # --- EXTRACTION DU PARAMÈTRE 'b' (Sécurisée) ---
-            # ASTUCE : On crée une liste qui exclut le nombre
-            # qu'on vient de trouver pour 'a'
-            restants = [num for num in chiffres_trouves
-                        if int(num) != valeur_a]
-
-            # Sécurité au cas où l'utilisateur ferait
-            # "What is the sum of 5 and 5?"
-            # Si les deux nombres d'origine sont identiques,
-            # 'restants' serait vide. On le réinitialise.
-            if not restants:
-                restants = chiffres_trouves
-
-            prompt_b = (f"In the request '{i['prompt']}',"
-                        "what is the second number? Answer:")
-            input_ids_b = ia.encode(prompt_b).tolist()[0]
-            logits_b = ia.get_logits_from_input_ids(input_ids_b)
-
-            scores_b = [-float('inf')] * len(logits_b)
-            # On ne masque le tableau QU'AVEC les nombres restants !
-            for num in restants:
-                token_id = ia.encode(num).tolist()[0][0]
-                scores_b[token_id] = logits_b[token_id]
-
-            id_gagnant_b = torch.tensor(scores_b).argmax().item()
-            valeur_b = next(int(num) for num in restants
-                            if ia.encode(num).tolist()[0][0] == id_gagnant_b)
-
-            # Calcul exact géré par Python
-            resultat = valeur_a + valeur_b
-            print(f"Fonction : {nom_fonction} |"
-                  f" Arguments : a={valeur_a}, b={valeur_b}")
-            print(f"Retour de l'outil : {resultat}")
-
-            # Format JSON standard pour le Function Calling
-            donnees_appel = {
-                "name": nom_fonction,
-                "arguments": {"a": valeur_a, "b": valeur_b}
-            }
-            resultats_json.append(donnees_appel)
-
-        # =====================================================================
-        # CAS 2 : Déclencheur "greet" -> Fonction fn_greet
-        # =====================================================================
-        elif "greet" in prompt_lower:
-            nom_fonction = noms_fonct[1]
-
-            # Découpage des mots de la phrase
+        # --- CAS : fn_greet ---
+        elif nom_fonction == "fn_greet":
             mots_phrase = [m.strip("?. '") for m in i["prompt"].split()]
 
-            prompt_name = (f"In the request '{i['prompt']}',"
-                           "what is the name of the person? Answer:")
-            input_ids_name = ia.encode(prompt_name).tolist()[0]
-            logits_name = ia.get_logits_from_input_ids(input_ids_name)
-
+            prompt_name = (f"In the request '{i['prompt']}', "
+                           "what is the name of the person to greet? Answer:")
+            logits_name = ia.get_logits_from_input_ids(
+                ia.encode(prompt_name).tolist()[0])
             scores_name = [-float('inf')] * len(logits_name)
             for m in mots_phrase:
                 if m.lower() != "greet":
-                    token_id = ia.encode(m).tolist()[0][0]
-                    scores_name[token_id] = logits_name[token_id]
-
+                    t_id = ia.encode(m).tolist()[0][0]
+                    scores_name[t_id] = logits_name[t_id].item() if hasattr(
+                        logits_name[t_id], 'item') else logits_name[t_id]
             id_gagnant_name = torch.tensor(scores_name).argmax().item()
-            # Python sélectionne le mot complet intact d'origine
-            # ("shrek" ou "john")
-            nom_extrait = next(m for m in mots_phrase
-                               if m.lower() != "greet" and
-                               ia.encode(m).tolist()[0][0] == id_gagnant_name)
 
-            resultat = f"Bonjour {nom_extrait}, ravi de vous rencontrer !"
-            print(f"Fonction : {nom_fonction} |"
-                  f"Argument : name='{nom_extrait}'")
-            print(f"Retour de l'outil : {resultat}")
+            nom_extrait = next(m for m in mots_phrase if m.lower() != "greet"
+                               and ia.encode(m).tolist()[0][0] ==
+                               id_gagnant_name)
 
-            donnees_appel = {
-                "name": nom_fonction,
-                "arguments": {"name": nom_extrait}
-            }
-            resultats_json.append(donnees_appel)
-        # =====================================================================
-        # CAS 3 : Déclencheur "reverse" -> Fonction fn_reverse_string
-        # =====================================================================
-        elif "reverse" in prompt_lower:
-            nom_fonction = noms_fonct[2]
+            arguments_extraits = {"name": nom_extrait}
+            print(f"   Arguments : {arguments_extraits} "
+                  f"| Résultat : Bonjour {nom_extrait} !")
 
+        # --- CAS : fn_reverse_string ---
+        elif nom_fonction == "fn_reverse_string":
             mots_phrase = [m.strip("?. '") for m in i["prompt"].split()]
 
             prompt_str = (f"In the request '{i['prompt']}', "
                           "what is the text string to reverse? Answer:")
-            input_ids_str = ia.encode(prompt_str).tolist()[0]
-            logits_str = ia.get_logits_from_input_ids(input_ids_str)
-
+            logits_str = ia.get_logits_from_input_ids(
+                ia.encode(prompt_str).tolist()[0])
             scores_str = [-float('inf')] * len(logits_str)
             for m in mots_phrase:
                 if m.lower() not in ["reverse", "the", "string"]:
-                    token_id = ia.encode(m).tolist()[0][0]
-                    scores_str[token_id] = logits_str[token_id]
+                    t_id = ia.encode(m).tolist()[0][0]
+                    scores_str[t_id] = (logits_str[t_id].item()
+                                        if hasattr(logits_str[t_id], 'item')
+                                        else logits_str[t_id])
 
             id_gagnant_str = torch.tensor(scores_str).argmax().item()
-            texte_extrait = next(m for m in mots_phrase
-                                 if m.lower() not in
+            texte_extrait = next(m for m in mots_phrase if m.lower() not in
                                  ["reverse", "the", "string"] and
                                  ia.encode(m).tolist()[0][0] == id_gagnant_str)
 
-            # Inversion de la chaîne en Python
-            resultat = texte_extrait[::-1]
-            print(f"Fonction : {nom_fonction} |"
-                  f"Argument : s='{texte_extrait}'")
-            print(f"Retour de l'outil : {resultat}")
+            arguments_extraits = {"s": texte_extrait}
+            print(f"   Arguments : {arguments_extraits} "
+                  f"| Résultat : {texte_extrait[::-1]}")
 
-            donnees_appel = {
-                "name": nom_fonction,
-                "arguments": {"name": nom_extrait}
-            }
-            resultats_json.append(donnees_appel)
+        # Enregistrement final structuré
+        donnees_appel = {
+            "name": nom_fonction,
+            "arguments": arguments_extraits
+        }
+        resultats_json.append(donnees_appel)
+
+    # 3. Sauvegarde finale
     try:
-        with open("function_calls.json", "w")as f:
+        with open("function_calls.json", "w") as f:
             json.dump(resultats_json, f, indent=4)
+        print("\nStructure JSON enregistrée avec "
+              "succès dans function_calls.json !")
     except Exception:
         return None
 

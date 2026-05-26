@@ -28,7 +28,7 @@
     {
         "name": "fn_reverse_string",
         "arguments": {
-            "name": "john"
+            "s": "hello"
         }
     }
 ]
