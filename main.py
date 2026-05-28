@@ -2,74 +2,95 @@
 
 This module leverages a Small Language Model (SLM) to analyze user prompts,
 dynamically identify the most appropriate target function using sequence
-log-likelihood scoring (Constrained Scoring), and perform token-constrained
-logit masking to extract the required arguments before saving the structured
-calls into a JSON file.
+log-likelihood scoring, and perform dynamic token-constrained logit masking
+based on JSON schema parameters without using hardcoded function names.
 """
 
 import os
 import json
+import argparse
 from llm_sdk.llm_sdk import Small_LLM_Model
 from parse import Parse
-import torch
+from typing import Any, cast
 
-# Prevent caching from filling up your home directory
+# Set HF path properly to avoid system disk space exhaustion
 os.environ["HF_HOME"] = "/tmp/.hf_cache"
 
 
-def main() -> None:
-    """Execute the complete Function Calling pipeline on a batch of tests.
+def load_vocab_tokens(ia_model: Small_LLM_Model) -> dict[Any, Any]:
+    """Load the official vocabulary mapping from the SDK file.
 
-    The execution workflow consists of 3 major phases:
-    1. System initialization: Loading function schemas and user input cases.
-    2. Sequence Iteration: For each individual prompt, evaluates the target
-       function and isolates valid tokens to extract parameters.
-    3. Exporting: Writing the structured function calls to an output JSON file.
+    Args:
+        ia_model (Small_LLM_Model): The active initialized core LLM.
+
+    Returns:
+        dict: A loaded mapping dictionary linking string tokens to IDs.
     """
-    # 1. Initialize the language model and file parser
+    try:
+        vocab_path = ia_model.get_path_to_vocab_file()
+        with open(vocab_path, "r", encoding="utf-8") as f:
+            return cast(dict[Any, Any], json.load(f))
+    except Exception:
+        return {}
+
+
+def main() -> None:
+    """Execute the complete generic function calling pipeline.
+
+    Parses command line arguments, handles the dynamic extraction of schema
+    parameters based on types declared in JSON, and exports results matching
+    the strict requirements format.
+    """
+    parser = argparse.ArgumentParser(description="Call Me Maybe SLM Router")
+    parser.add_argument("--functions_definition", required=True, type=str)
+    parser.add_argument("--input", required=True, type=str)
+    parser.add_argument("--output", required=True, type=str)
+    args = parser.parse_args()
+
+    # Initialize SDK Model and File Parser Components
     ia = Small_LLM_Model("Qwen/Qwen3-0.6B")
-    file = Parse(
-        fonct="functions_definition.json",
-        input_file="function_calling_tests.json",
-        output_file="function_calls.json"
+
+    file_manager = Parse(
+        fonct=args.functions_definition,
+        input_file=args.input,
+        output_file=args.output
     )
 
-    prompth = file.fonction_input()
-    fonct = file.fonction_def()
+    prompts_pool = file_manager.fonction_input()
+    functions_pool = file_manager.fonction_def()
 
-    # Official list of function names
-    noms_fonct = [f.data_fonct.name for f in fonct]
+    if not prompts_pool or not functions_pool:
+        print("Pipeline aborted due to missing or invalid configurations.")
+        return
+
     resultats_json = []
 
-    # 2. Core loop through user prompt sequences
-    for i in prompth:
-        print(f"\n--- Analyzing request: '{i['prompt']}' ---")
+    for item in prompts_pool:
+        user_prompt = item["prompt"]
+        print(f"\n--- Analyzing request: '{user_prompt}' ---")
 
         # =====================================================================
-        # PHASE 1: Function Target Selection via Sequence Log-Likelihood
+        # PHASE 1: Function Selection via Log-Likelihood Sequence Scoring
         # =====================================================================
         scores_fonctions = {}
 
-        for f_name in noms_fonct:
+        for f_obj in functions_pool:
+            f_name = f_obj.data_fonct.name
             prompt_base = (
-                f"Analyze the request: '{i['prompt']}'."
+                f"Analyze the request: '{user_prompt}'."
                 " The function to call is: "
             )
             prompt_complet = prompt_base + f_name
 
-            # Encode both sequences to isolate the suffix tokens
             ids_complet = ia.encode(prompt_complet).tolist()[0]
             ids_base = ia.encode(prompt_base).tolist()[0]
-
-            # Index boundary where the function name string actually starts
             idx_debut = len(ids_base)
             score_total = 0.0
 
-            for position in range(idx_debut, len(ids_complet)):
-                sous_sequence_ids = ids_complet[:position]
-                logits_etape = ia.get_logits_from_input_ids(sous_sequence_ids)
-
-                token_attendu = ids_complet[position]
+            for pos in range(idx_debut, len(ids_complet)):
+                sub_seq = ids_complet[:pos]
+                logits_etape = ia.get_logits_from_input_ids(sub_seq)
+                token_attendu = ids_complet[pos]
                 logit_val = logits_etape[token_attendu]
                 if hasattr(logit_val, 'item'):
                     logit_val = logit_val.item()
@@ -77,169 +98,113 @@ def main() -> None:
 
             scores_fonctions[f_name] = score_total
 
-        # Select the target function name with maximum cumulative score
-        nom_fonction = max(scores_fonctions, key=scores_fonctions.get)
-        print(
-            "-> Function selected via Constrained Scoring: "
-            f"{nom_fonction}"
+        nom_fonction = max(scores_fonctions, key=lambda k: scores_fonctions[k])
+        print(f"-> Function selected: {nom_fonction}")
+
+        matched_f = next(
+            f for f in functions_pool if f.data_fonct.name == nom_fonction
+        )
+        properties_schema = matched_f.data_fonct.parameters
+
+        # =====================================================================
+        # PHASE 2: Generic Sequential Argument Extraction
+        # =====================================================================
+        parameters_extraits: dict[str, Any] = {}
+        words_in_prompt = [w.strip("?. '\"") for w in user_prompt.split()]
+
+        # Base de prompt pour l'extraction qui va accumuler les réponses
+        base_prompt_ext = (
+            f"Context: The user request is '{user_prompt}'. "
+            f"We are extracting arguments for the tool '{nom_fonction}'. "
         )
 
-        # Dictionary to store structured arguments for the final payload
-        arguments_extraits = {}
+        for param_name, schema_info in properties_schema.items():
+            param_type = schema_info.get("type", "string")
 
-        # =====================================================================
-        # PHASE 2: Constrained Token Logit Masking for Argument Extraction
-        # =====================================================================
+            # On ajoute au prompt les paramètres déjà trouvés
+            # pour guider le modèle
+            historique = ""
+            if parameters_extraits:
+                historique = "Given that " + ", ".join(
+                    f"parameter '{k}' is {v}" for k, v in
+                    parameters_extraits.items()) + ". "
 
-        # --- CASE: fn_add_numbers ---
-        if nom_fonction == "fn_add_numbers":
-            chiffres_trouves = [
-                c.strip('?.') for c in i["prompt"].split()
-                if c.strip('?.').isdigit()
-            ]
+            # Construit la question finale précise
+            prompt_ext = (
+                f"{base_prompt_ext}{historique}"
+                f"What is the value of parameter '{param_name}'? Answer:"
+            )
 
-            if len(chiffres_trouves) >= 2:
-                # Parameter 'a' Extraction
-                prompt_a = (
-                    f"In the request '{i['prompt']}',"
-                    " what is the first number? Answer:"
-                )
-                logits_a = ia.get_logits_from_input_ids(
-                    ia.encode(prompt_a).tolist()[0]
-                )
-                scores_a = [-float('inf')] * len(logits_a)
-                for num in chiffres_trouves:
-                    t_id = ia.encode(num).tolist()[0][0]
-                    scores_a[t_id] = (
-                        logits_a[t_id].item()
-                        if hasattr(logits_a[t_id], 'item')
-                        else logits_a[t_id]
-                    )
-                id_gagnant_a = torch.tensor(scores_a).argmax().item()
-                valeur_a = next(
-                    int(num) for num in chiffres_trouves
-                    if ia.encode(num).tolist()[0][0] == id_gagnant_a
-                )
+            logits_ext = ia.get_logits_from_input_ids(
+                ia.encode(prompt_ext).tolist()[0]
+            )
 
-                # Parameter 'b' Extraction
-                restants = [
-                    num for num in chiffres_trouves
-                    if int(num) != valeur_a
-                ] or chiffres_trouves
-                prompt_b = (
-                    f"In the request '{i['prompt']}',"
-                    " what is the second number? Answer:"
-                )
-                logits_b = ia.get_logits_from_input_ids(
-                    ia.encode(prompt_b).tolist()[0]
-                )
-                scores_b = [-float('inf')] * len(logits_b)
-                for num in restants:
-                    t_id = ia.encode(num).tolist()[0][0]
-                    scores_b[t_id] = (
-                        logits_b[t_id].item()
-                        if hasattr(logits_b[t_id], 'item')
-                        else logits_b[t_id]
-                    )
-                id_gagnant_b = torch.tensor(scores_b).argmax().item()
-                valeur_b = next(
-                    int(num) for num in restants
-                    if ia.encode(num).tolist()[0][0] == id_gagnant_b
-                )
+            # Filtrage des candidats selon le type JSON
+            if param_type in ["number", "integer"]:
+                candidates = [w for w in words_in_prompt if w.isdigit()]
+                # Si 'a' a déjà pris une valeur, on évite de la redonner
+                # en priorité absolue
+                # mais on la laisse dans les candidats au cas où a == b
             else:
-                valeur_a, valeur_b = 0, 0
+                candidates = [
+                    w for w in words_in_prompt
+                    if w.lower() not in ["greet", "reverse", "the", "string"]
+                ]
 
-            arguments_extraits = {"a": valeur_a, "b": valeur_b}
-            print(
-                f"   Arguments: {arguments_extraits} "
-                f"| Execution Result: {valeur_a + valeur_b}"
-            )
+            if not candidates:
+                parameters_extraits[param_name] = (
+                    0 if param_type in ["number", "integer"] else ""
+                )
+                continue
 
-        # --- CASE: fn_greet ---
-        elif nom_fonction == "fn_greet":
-            mots_phrase = [m.strip("?. '") for m in i["prompt"].split()]
+            best_candidate = candidates[0]
+            best_score = -float('inf')
 
-            prompt_name = (
-                f"In the request '{i['prompt']}', "
-                "what is the name of the person to greet? Answer:"
-            )
-            logits_name = ia.get_logits_from_input_ids(
-                ia.encode(prompt_name).tolist()[0]
-            )
-            scores_name = [-float('inf')] * len(logits_name)
-            for m in mots_phrase:
-                if m.lower() != "greet":
-                    t_id = ia.encode(m).tolist()[0][0]
-                    scores_name[t_id] = (
-                        logits_name[t_id].item()
-                        if hasattr(logits_name[t_id], 'item')
-                        else logits_name[t_id]
-                    )
-            id_gagnant_name = torch.tensor(scores_name).argmax().item()
+            for cand in candidates:
+                encoded_ids = ia.encode(cand).tolist()[0]
+                if encoded_ids:
+                    token_id_cand = encoded_ids[0]
+                    if token_id_cand < len(logits_ext):
+                        score_val = (
+                            logits_ext[token_id_cand].item()
+                            if hasattr(logits_ext[token_id_cand], 'item')
+                            else logits_ext[token_id_cand]
+                        )
 
-            nom_extrait = next(
-                m for m in mots_phrase
-                if m.lower() != "greet"
-                and ia.encode(m).tolist()[0][0] == id_gagnant_name
-            )
+                        # Pénalisation légère
+                        # si le candidat exact a déjà été utilisé
+                        # pour un paramètre précédent
+                        # (permet de forcer la distinction)
+                        if cand in [str(v) for v in
+                                    parameters_extraits.values()]:
+                            score_val -= 15.0
 
-            arguments_extraits = {"name": nom_extrait}
-            print(
-                f"   Arguments: {arguments_extraits} "
-                f"| Execution Result: Hello {nom_extrait} !"
-            )
+                        if score_val > best_score:
+                            best_score = score_val
+                            best_candidate = cand
 
-        # --- CASE: fn_reverse_string ---
-        elif nom_fonction == "fn_reverse_string":
-            mots_phrase = [m.strip("?. '") for m in i["prompt"].split()]
+            # Attribution typée finale
+            if param_type in ["number", "integer"]:
+                parameters_extraits[param_name] = int(best_candidate)
+            else:
+                parameters_extraits[param_name] = best_candidate
 
-            prompt_str = (
-                f"In the request '{i['prompt']}', "
-                "what is the text string to reverse? Answer:"
-            )
-            logits_str = ia.get_logits_from_input_ids(
-                ia.encode(prompt_str).tolist()[0]
-            )
-            scores_str = [-float('inf')] * len(logits_str)
-            for m in mots_phrase:
-                if m.lower() not in ["reverse", "the", "string"]:
-                    t_id = ia.encode(m).tolist()[0][0]
-                    scores_str[t_id] = (
-                        logits_str[t_id].item()
-                        if hasattr(logits_str[t_id], 'item')
-                        else logits_str[t_id]
-                    )
+        print(f"   Parameters extracted dynamically: {parameters_extraits}")
 
-            id_gagnant_str = torch.tensor(scores_str).argmax().item()
-            texte_extrait = next(
-                m for m in mots_phrase
-                if m.lower() not in ["reverse", "the", "string"]
-                and ia.encode(m).tolist()[0][0] == id_gagnant_str
-            )
-
-            arguments_extraits = {"s": texte_extrait}
-            print(
-                f"   Arguments: {arguments_extraits} "
-                f"| Execution Result: {texte_extrait[::-1]}"
-            )
-
-        # Construct payload structure
-        donnees_appel = {
+        # Remplissage du format de sortie attendu
+        resultats_json.append({
+            "prompt": user_prompt,
             "name": nom_fonction,
-            "arguments": arguments_extraits
-        }
-        resultats_json.append(donnees_appel)
+            "parameters": parameters_extraits
+        })
 
-    # 3. Export structured dictionary to disk
+    # Enregistrement du fichier de sortie
     try:
-        with open(file.get_output_file(), "w") as f:
+        with open(file_manager.get_output_file(), "w") as f:
             json.dump(resultats_json, f, indent=4)
-        print(
-            "\nJSON payload structure successfully saved into "
-            "function_calls.json!"
-        )
+        print("\nResults successfully saved into destination.")
     except Exception:
-        return None
+        return
 
 
 if __name__ == "__main__":

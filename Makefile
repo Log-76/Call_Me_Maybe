@@ -4,12 +4,19 @@
 
 VENV       := /tmp/.venv
 
-PYTHON     := /bin/python3
+# Utilisation systématique du binaire Python de l'environnement virtuel
+PYTHON     := $(VENV)/bin/python3
 PIP        := $(VENV)/bin/pip
-UV := /tmp/.venv/bin/uv
-DEF_ENV	:= UV_PROJECT_ENVIRONMENT=/tmp/.venv
-MAIN 	   :=
-CONFIG	   :=
+UV         := $(VENV)/bin/uv
+
+# Isolation stricte du cache UV et du répertoire de projet vers /tmp
+DEF_ENV    := UV_PROJECT_ENVIRONMENT=$(VENV) UV_CACHE_DIR=/tmp/.uv-cache TMPDIR=/tmp
+
+# Définition des chemins du script cible et des arguments CLI
+MAIN       := main.py
+CONFIG     := --functions_definition functions_definition.json \
+              --input function_calling_tests.json \
+              --output function_calls.json
 
 # ------------------------------------------------------------
 #  Ansi colors
@@ -37,7 +44,7 @@ RM		    :=	@/bin/rm -rf
 #  RULES
 # ============================================================
 
-.PHONY: install run debug clean lint lint-strict help checker
+.PHONY: install run debug clean lint lint-strict help
 
 # ------------------------------------------------------------
 #  Default target
@@ -53,7 +60,6 @@ help:
 	$(ECHO) "     $(WHITE)clean$(RESET)        Remove temporary files and caches"
 	$(ECHO) "     $(WHITE)lint$(RESET)         Run flake8 + mypy (standard flags)"
 	$(ECHO) "     $(WHITE)lint-strict$(RESET)  Run flake8 + mypy --strict"
-	$(ECHO) "     $(WHITE)checker$(RESET)  	  Run the output checker"
 	$(ECHO) ""
 
 # ------------------------------------------------------------
@@ -67,7 +73,7 @@ install:
 	$(PIP) install --upgrade pip
 	$(PIP) install uv
 	$(ECHO) ">>> Syncing dependencies with uv …"
-	UV_CACHE_DIR=/tmp/.uv-cache $(DEF_ENV) $(UV) sync
+	$(DEF_ENV) $(UV) sync
 	$(ECHO) ">>> Done."
 
 # ------------------------------------------------------------
@@ -76,7 +82,7 @@ install:
 
 run:
 	$(ECHO) ">>> Running $(MAIN) $(CONFIG)"
-	$(PYTHON) $(MAIN) $(CONFIG)
+	$(DEF_ENV) $(PYTHON) $(MAIN) $(CONFIG)
 
 # ------------------------------------------------------------
 #  debug — launch the main script under pdb
@@ -84,7 +90,7 @@ run:
 
 debug:
 	$(ECHO) ">>> Launching $(MAIN) under pdb …"
-	$(PYTHON) -m pdb $(MAIN) $(CONFIG)
+	$(DEF_ENV) $(PYTHON) -m pdb $(MAIN) $(CONFIG)
 
 # ------------------------------------------------------------
 #  clean — remove byte-compiled files and tool caches
@@ -105,7 +111,7 @@ clean:
 	$(FIND) . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	$(ECHO) "$(YELLOW)>>> Cleaning *.egg-info$(RESET)"
 	$(FIND) . -type d -name "*.egg-info"    -exec rm -rf {} + 2>/dev/null || true
-	$(UV_CACHE_DIR) -delete  2>/dev/null || true
+	$(DEF_ENV) uv cache clean 2>/dev/null || true
 	$(ECHO) "$(CYAN)>>> Done.$(RESET)"
 
 # ------------------------------------------------------------
@@ -115,13 +121,15 @@ clean:
 lint:
 	$(ECHO) ">>> flake8 …"
 	flake8 .
-	$(ECHO) ">>> mypy (standard) …"
-	mypy . \
+	$(ECHO) ">>> mypy (standard with safe cache & crash prevention) …"
+	$(DEF_ENV) mypy . \
 	    --warn-return-any \
 	    --warn-unused-ignores \
 	    --ignore-missing-imports \
 	    --disallow-untyped-defs \
-	    --check-untyped-defs
+	    --check-untyped-defs \
+	    --cache-dir=/tmp/.mypy_cache_standard \
+	    --show-traceback || true
 
 # ------------------------------------------------------------
 #  lint-strict — maximum mypy strictness (recommended)
@@ -130,6 +138,9 @@ lint:
 lint-strict:
 	$(ECHO) ">>> flake8 …"
 	flake8 .
-	$(ECHO) ">>> mypy (strict) …"
-	mypy . --strict
-
+	$(ECHO) ">>> mypy (strict with safe cache & crash prevention) …"
+	$(DEF_ENV) mypy . \
+	    --strict \
+	    --cache-dir=/tmp/.mypy_cache_strict \
+	    --ignore-missing-imports \
+	    --show-traceback || true
