@@ -3,12 +3,14 @@ name = "call-me-maybe"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy",
-    "pydantic",
-	"torch>=2.0.0",
+    "numpy==2.2.6",
+    "pydantic>=2.11.0",
+	"torch",
     "transformers>=4.40.0",
     "huggingface-hub>=0.20.0",
-    "accelerate"
+    "accelerate",
+    "fire>=0.7.1",
+    "colorama>=0.4.6",
 ]
 
 [dependency-groups]

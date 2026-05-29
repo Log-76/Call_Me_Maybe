@@ -5,7 +5,7 @@
 VENV       := /tmp/.venv
 
 # Utilisation systématique du binaire Python de l'environnement virtuel
-PYTHON     := $(VENV)/bin/python3
+PYTHON     := $(VENV)/bin/python3 -m
 PIP        := $(VENV)/bin/pip
 UV         := $(VENV)/bin/uv
 
@@ -13,10 +13,10 @@ UV         := $(VENV)/bin/uv
 DEF_ENV    := UV_PROJECT_ENVIRONMENT=$(VENV) UV_CACHE_DIR=/tmp/.uv-cache TMPDIR=/tmp
 
 # Définition des chemins du script cible et des arguments CLI
-MAIN       := main.py
-CONFIG     := --functions_definition functions_definition.json \
-              --input function_calling_tests.json \
-              --output function_calls.json
+MAIN       := src
+CONFIG     := --functions_definition data/input/functions_definition.json \
+              --input data/input/function_calling_tests.json \
+              --output data/output/function_calls.json
 
 # ------------------------------------------------------------
 #  Ansi colors
@@ -111,7 +111,7 @@ clean:
 	$(FIND) . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	$(ECHO) "$(YELLOW)>>> Cleaning *.egg-info$(RESET)"
 	$(FIND) . -type d -name "*.egg-info"    -exec rm -rf {} + 2>/dev/null || true
-	$(DEF_ENV) uv cache clean 2>/dev/null || true
+	$(DEF_ENV) uv cache clean
 	$(ECHO) "$(CYAN)>>> Done.$(RESET)"
 
 # ------------------------------------------------------------
