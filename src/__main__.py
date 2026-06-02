@@ -1,12 +1,12 @@
 """Main routing module for mapping text requests to specific tools.
 
-This module leverages a Small Language Model (SLM) to analyze user prompts,
+This module leverages a Large Language Model (SLM) to analyze user prompts,
 dynamically identify the most appropriate target function using sequence
 log-likelihood scoring, and perform dynamic token-constrained logit masking
 based on JSON schema parameters without using hardcoded function names.
+use export HF_HOME="/tmp/.hf_cache"
 """
 
-import os
 import json
 import argparse
 import re
@@ -14,11 +14,6 @@ import pathlib
 from llm_sdk.llm_sdk import Small_LLM_Model
 from .parse import Parse
 from typing import Any
-
-
-# Fixer le cache HF dans /tmp pour eviter
-# la saturation du quota disque personnel
-os.environ["HF_HOME"] = "/tmp/.hf_cache"
 
 
 def main() -> None:
@@ -53,6 +48,9 @@ def main() -> None:
     resultats_json = []
 
     for item in prompts_pool:
+        if not item or "prompt" not in item:
+            continue
+
         user_prompt = item["prompt"]
         print(f"\n--- Analyzing request: '{user_prompt}' ---")
 
@@ -67,8 +65,9 @@ def main() -> None:
             # Nettoyage sémantique des underscores pour l'agent
             f_name_propre = f_name.replace("_", " ")
 
-            prompt_contexte = (f"The best tool for the request '{user_prompt}'"
-                               "is")
+            prompt_contexte = (
+                f"The best tool for the request '{user_prompt}' is"
+            )
             prompt_complet = f"{prompt_contexte} '{f_name_propre}'"
 
             ids_complet = ia.encode(prompt_complet).tolist()[0]
@@ -109,110 +108,116 @@ def main() -> None:
         # =====================================================================
         parameters_extraits: dict[str, Any] = {}
 
-        # 1. Extraction des expressions numériques
-        candidates_numbers = re.findall(r"\d+\.\d+|\d+", user_prompt)
-
-        # 2. Extraction brute des arguments textuels structurés
-        quoted_strings_flat = re.findall(r"'(.*?)'|\"(.*?)\"", user_prompt)
-        candidates_strings = [q[0] if q[0] else q[1]
-                              for q in quoted_strings_flat]
-
-        # Capture des chemins (Linux/Windows) et environnements
-        path_regex = (
-            r"([a-zA-Z]:\\[\w\d\.\-_\\]+|"
-            r"\/[\w\d\.\-_]+(?:\/[\w\d\.\-_]+)*|"
-            r"production|system)"
-        )
-        paths_or_db = re.findall(path_regex, user_prompt)
-        candidates_strings.extend(paths_or_db)
-
-        encodings = re.findall(r"([\w\d\-]+)\s+encoding", user_prompt)
-        candidates_strings.extend(encodings)
-
-        # Nettoyage et élimination des doublons de chaînes structurées
-        unique_strings = []
-        for s in candidates_strings:
-            s_stripped = s.strip() if s else ""
-            if s_stripped and s_stripped not in unique_strings:
-                unique_strings.append(s_stripped)
-
         string_params = [p for p, info in properties_schema.items()
                          if info.get("type") == "string"]
         numeric_params = [p for p, info in properties_schema.items()
                           if info.get("type") in ["number", "integer"]]
 
-        # --- CAS PARTICULIER : Format template ---
-        if "Format template:" in user_prompt and string_params:
-            template_val = user_prompt.split("Format template:")[1].strip()
-            parameters_extraits[string_params[0]] = template_val
-            string_params = []
+        # SÉCURITÉ : Si le prompt est textuellement vide, on évite le crash
+        if not user_prompt or not user_prompt.strip():
+            for p in numeric_params:
+                param_type = properties_schema[p].get("type")
+                parameters_extraits[p] = 0.0 if param_type == "number" else 0
+            for p in string_params:
+                parameters_extraits[p] = ""
+        else:
+            # 1. Extraction des expressions numériques
+            candidates_numbers = re.findall(r"\d+\.\d+|\d+", user_prompt)
 
-        # --- ATTRIBUTION DES PARAMÈTRES NUMÉRIQUES ---
-        for idx, param_name in enumerate(numeric_params):
-            param_type = properties_schema[param_name].get("type")
-            if idx < len(candidates_numbers):
-                val_brute = candidates_numbers[idx]
-                parameters_extraits[param_name] = float(
-                    val_brute) if param_type == "number" else int(val_brute)
-            else:
-                parameters_extraits[param_name] = (0.0 if
-                                                   param_type == "number"
-                                                   else 0)
+            # 2. Extraction brute des arguments textuels structurés
+            quoted_strings_flat = re.findall(r"'(.*?)'|\"(.*?)\"", user_prompt)
+            candidates_strings = [q[0] if q[0] else q[1]
+                                  for q in quoted_strings_flat]
 
-        # --- ATTRIBUTION DES CHAÎNES (STRINGS) ---
-        if string_params:
-            for param_name in string_params:
-                # STRATÉGIE DE REPLI SÉMANTIQUE : Si aucun motif
-                # structuré n'est trouvé (ex: "Greet shrek"),
-                # on utilise les mots restants du prompt comme
-                # candidats potentiels.
-                current_candidates = list(unique_strings)
-                if not current_candidates:
-                    # Découpage en mots et exclusion des
-                    # mots grammaticaux ou de commandes
-                    mots_prompt = re.findall(r"\b\w+\b", user_prompt)
-                    mots_filtres = [
-                        m for m in mots_prompt
-                        if m.lower() not in ["greet", "what", "is", "the",
-                                             "at", "with", "an", "on", "for",
-                                             "run", "read"]
-                    ]
-                    current_candidates = mots_filtres
+            # Capture des chemins (Linux/Windows) et environnements
+            path_regex = (
+                r"([a-zA-Z]:\\[\w\d\.\-_\\]+|"
+                r"\/[\w\d\.\-_]+(?:\/[\w\d\.\-_]+)*|"
+                r"production|system)"
+            )
+            paths_or_db = re.findall(path_regex, user_prompt)
+            candidates_strings.extend(paths_or_db)
 
-                if not current_candidates:
-                    parameters_extraits[param_name] = ""
-                    continue
+            encodings = re.findall(r"([\w\d\-]+)\s+encoding", user_prompt)
+            candidates_strings.extend(encodings)
 
-                best_cand = current_candidates[0]
-                best_score = -float('inf')
+            # Nettoyage et élimination des doublons de chaînes structurées
+            unique_strings = []
+            for s in candidates_strings:
+                s_stripped = s.strip() if s else ""
+                if s_stripped and s_stripped not in unique_strings:
+                    unique_strings.append(s_stripped)
 
-                prompt_ext = (f"In the request '{user_prompt}', the exact"
-                              f" text value for the parameter '{param_name}' "
-                              "is:")
-                logits_ext = ia.get_logits_from_input_ids(
-                    ia.encode(prompt_ext).tolist()[0])
+            # --- CAS PARTICULIER : Format template ---
+            if "Format template:" in user_prompt and string_params:
+                template_val = user_prompt.split("Format template:")[1].strip()
+                parameters_extraits[string_params[0]] = template_val
+                string_params = []
 
-                for cand in current_candidates:
-                    encoded = ia.encode(f" {cand}").tolist()[0]
-                    if encoded:
-                        score = logits_ext[encoded[0]].item() if hasattr(
-                            logits_ext[encoded[0]], 'item') else logits_ext[
-                                encoded[0]]
-                        if score > best_score:
-                            best_score = score
-                            best_cand = cand
+            # --- ATTRIBUTION DES PARAMÈTRES NUMÉRIQUES ---
+            for idx, param_name in enumerate(numeric_params):
+                param_type = properties_schema[param_name].get("type")
+                if idx < len(candidates_numbers):
+                    val_brute = candidates_numbers[idx]
+                    if param_type == "number":
+                        parameters_extraits[param_name] = float(val_brute)
+                    else:
+                        parameters_extraits[param_name] = int(val_brute)
+                else:
+                    parameters_extraits[param_name] = (
+                        0.0 if param_type == "number" else 0
+                    )
 
-                # Sécurité sur l'extraction des chemins de fichiers
-                if param_name == "path":
-                    best_cand = re.split(r"\s+with\s+", best_cand,
-                                         flags=re.IGNORECASE)[0]
+            # --- ATTRIBUTION DES CHAÎNES (STRINGS) ---
+            if string_params:
+                for param_name in string_params:
+                    current_candidates = list(unique_strings)
+                    if not current_candidates:
+                        mots_prompt = re.findall(r"\b\w+\b", user_prompt)
+                        mots_filtres = [
+                            m for m in mots_prompt
+                            if m.lower() not in [
+                                "greet", "what", "is", "the", "at", "with",
+                                "an", "on", "for", "run", "read"
+                            ]
+                        ]
+                        current_candidates = mots_filtres
 
-                parameters_extraits[param_name] = best_cand
+                    if not current_candidates:
+                        parameters_extraits[param_name] = ""
+                        continue
 
-                # Consommer le candidat élu de
-                # la liste principale s'il y figurait
-                if best_cand in unique_strings:
-                    unique_strings.remove(best_cand)
+                    best_cand = current_candidates[0]
+                    best_score = -float('inf')
+
+                    prompt_ext = (f"In the request '{user_prompt}', the exact"
+                                  f" text value for the parameter "
+                                  f"'{param_name}' is:")
+                    logits_ext = ia.get_logits_from_input_ids(
+                        ia.encode(prompt_ext).tolist()[0])
+
+                    for cand in current_candidates:
+                        encoded = ia.encode(f" {cand}").tolist()[0]
+                        if encoded:
+                            idx_tok = encoded[0]
+                            if hasattr(logits_ext[idx_tok], 'item'):
+                                score = logits_ext[idx_tok].item()
+                            else:
+                                score = logits_ext[idx_tok]
+
+                            if score > best_score:
+                                best_score = score
+                                best_cand = cand
+
+                    # Sécurité sur l'extraction des chemins de fichiers
+                    if param_name == "path":
+                        best_cand = re.split(r"\s+with\s+", best_cand,
+                                             flags=re.IGNORECASE)[0]
+
+                    parameters_extraits[param_name] = best_cand
+
+                    if best_cand in unique_strings:
+                        unique_strings.remove(best_cand)
 
         print(f"   Parameters extracted dynamically: {parameters_extraits}")
 

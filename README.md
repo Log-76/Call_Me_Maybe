@@ -17,20 +17,31 @@ Instructions
 
 ### Installation
 
-1.  git clone Call\_Me\_Maybecd Call\_Me\_Maybe
-    
-2.  pip3 install torch pydantic
-    
-3.  Ensure that the llm\_sdk module (providing the Small\_LLM\_Model API) is present in your Python path.
-    
+Vous pouvez installer les dépendances du projet de deux manières différentes selon vos préférences ou votre environnement :
+
+#### Option A: En utilisant UV (Recommandé)
+
+Assurez-vous d'avoir installé uv, puis synchronisez l'environnement :
+
+`   uv sync   `
+
+#### Option B: En utilisant le Makefile
+
+Vous pouvez également utiliser la commande automatisée d'installation du Makefile :
+
+`   make install   `
 
 ### Execution
 
-Run the main pipeline execution script using Python 3:
+Exécutez le script du pipeline principal en utilisant Python 3 :
 
-`   python3 main.py   `
+`   python3 src/main.py --functions_definition data/input/functions_definition.json --input data/input/function_calling_tests.json --output data/output/function_calls.json   `
 
-Upon execution, the script reads input prompts from function\_calling\_tests.json, resolves the correct function and its respective arguments, outputs execution details to the terminal, and saves the formatted calls to function\_calls.json.
+Ou utilisez simplement la commande simplifiée du Makefile :
+
+`   make run   `
+
+À l'exécution, le script lit les prompts d'entrée depuis function\_calling\_tests.json, résout la bonne fonction et ses arguments respectifs, affiche les détails d'exécution dans le terminal et enregistre les appels structurés dans function\_calls.json.
 
 Algorithm Explanation
 ---------------------
@@ -43,19 +54,19 @@ Rather than asking the model to freely generate a token to decide which function
 
 For each function signature $F \\in \\{\\text{fn\\\_add\\\_numbers}, \\text{fn\\\_greet}, \\text{fn\\\_reverse\\\_string}\\}$, we formulate a complete prompt prefix $C$:
 
-$$C = \\text{"Analyze the request: ''. The function to call is: "}$$
+$$C = \\text{"Identify the function that matches the user request. User Request: "}$$
 
-We then evaluate the joint probability of the complete token sequence of $F$ following $C$. The probability of generating a sequence of target tokens $T = (t\_1, t\_2, \\dots, t\_n)$ is defined as:
+We then evaluate the joint probability of the complete token sequence of $F$ following $C$. The probability of generating a sequence of target tokens $T = (t\\\_1, t\\\_2, \\dots, t\\\_n)$ is defined as:
 
-$$P(T \\mid C) = \\prod\_{k=1}^{n} P(t\_k \\mid C, t\_1, \\dots, t\_{k-1})$$
+$$P(T \\mid C) = \\prod\_{k=1}^{n} P(t\\\_k \\mid C, t\\\_1, \\dots, t\_{k-1})$$
 
 In log-space to prevent underflow, this becomes a summation of log-likelihoods:
 
-$$\\log P(T \\mid C) = \\sum\_{k=1}^{n} \\log P(t\_k \\mid C, t\_1, \\dots, t\_{k-1})$$
+$$\\log P(T \\mid C) = \\sum\_{k=1}^{n} \\log P(t\\\_k \\mid C, t\\\_1, \\dots, t\_{k-1})$$
 
-For each candidate function, the algorithm steps through the token positions, queries ia.get\_logits\_from\_input\_ids() with the historical sub-sequence, extracts the logit of the expected token $t\_k$, and sums them. The candidate with the highest log-likelihood is chosen via argmax:
+For each candidate function, the algorithm steps through the token positions, queries ia.get\_logits\_from\_input\_ids() with the historical sub-sequence, extracts the logit of the expected token $t\\\_k$, and sums them. The candidate with the highest log-likelihood is chosen via argmax:
 
-$$F^\* = \\arg\\max\_{F} \\left( \\log P(T\_F \\mid C) \\right)$$
+$$F^\\\* = \\arg\\max\_{F} \\left( \\log P(T\_F \\mid C) \\right)$$
 
 ### Passe 2: Argument Extraction via Vocabulary Logit Masking
 
@@ -108,7 +119,7 @@ Challenges Faced
 
 *   _Problem:_ Conversational prompts caused the model's attention weights to drift. For example, "Greet john" routed correctly to fn\_greet, but "Greet shrek" routed incorrectly to fn\_add\_numbers because the rare token "shrek" skewed the model's logits.
     
-*   _Solution:_ We removed instructions from the prompt templates and used a highly rigid structure ("The function to call is: fn\_") which forces the model to evaluate the pure mathematical likelihood of the function suffix rather than attempting to "understand" the prompt.
+*   _Solution:_ We removed instructions from the prompt templates and used a highly rigid structure ("The best tool for the request '{user\_prompt}' is") which forces the model to evaluate the pure mathematical likelihood of the function suffix rather than attempting to "understand" the prompt.
     
 
 Testing Strategy
@@ -138,11 +149,11 @@ Example Usage
 
 ### Execution Log Output
 
-`   --- Analyzing request: 'What is the sum of 2 and 3?' ---  -> Function selected via Constrained Scoring: fn_add_numbers     Arguments: {'a': 2, 'b': 3} | Execution Result: 5  --- Analyzing request: 'Greet shrek' ---  -> Function selected via Constrained Scoring: fn_greet     Arguments: {'name': 'shrek'} | Execution Result: Hello shrek !  --- Analyzing request: 'Reverse the string 'hello'' ---  -> Function selected via Constrained Scoring: fn_reverse_string     Arguments: {'s': 'hello'} | Execution Result: olleh  JSON payload structure successfully saved into function_calls.json!   `
+`   --- Analyzing request: 'What is the sum of 2 and 3?' ---  -> Function dynamically selected by LLM: fn_add_numbers     Parameters extracted dynamically: {'a': 2.0, 'b': 3.0}  --- Analyzing request: 'Greet shrek' ---  -> Function dynamically selected by LLM: fn_greet     Parameters extracted dynamically: {'name': 'shrek'}  --- Analyzing request: 'Reverse the string 'hello'' ---  -> Function dynamically selected by LLM: fn_reverse_string     Parameters extracted dynamically: {'s': 'hello'}  Results successfully saved into destination.   `
 
 ### Generated Result File (function\_calls.json)
 
-`   [      {          "name": "fn_add_numbers",          "arguments": {              "a": 2,              "b": 3          }      },      {          "name": "fn_greet",          "arguments": {              "name": "shrek"          }      },      {          "name": "fn_reverse_string",          "arguments": {              "s": "hello"          }      }  ]   `
+`   [      {          "prompt": "What is the sum of 2 and 3?",          "name": "fn_add_numbers",          "parameters": {              "a": 2.0,              "b": 3.0          }      },      {          "prompt": "What is the sum of 265 and 345?",          "name": "fn_add_numbers",          "parameters": {              "a": 265.0,              "b": 345.0          }      },      {          "prompt": "Greet shrek",          "name": "fn_greet",          "parameters": {              "name": "shrek"          }      },      {          "prompt": "Greet john",          "name": "fn_greet",          "parameters": {              "name": "john"          }      },      {          "prompt": "Reverse the string 'hello'",          "name": "fn_reverse_string",          "parameters": {              "s": "hello"          }      }  ]   `
 
 Resources & AI Usage Documentation
 ----------------------------------
@@ -165,6 +176,3 @@ Artificial Intelligence assistants were utilized to support the development of t
 2.  **Flake8 Compliance Refactoring:** Automatically refactoring long strings, nested dictionary structures, and variable naming conventions to pass linting checks without breaking PyTorch tensor logic.
     
 3.  **Documentation Generation:** Creating comprehensive Google-style docstrings and compiling this project README.md to meet the 42 curriculum requirements.
-    
-
-`   eof   `

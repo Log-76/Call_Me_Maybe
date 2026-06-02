@@ -5,7 +5,7 @@
 VENV       := /tmp/.venv
 
 # Utilisation systématique du binaire Python de l'environnement virtuel
-PYTHON     := $(VENV)/bin/python3 -m
+PYTHON     := $(VENV)/bin/python -m
 PIP        := $(VENV)/bin/pip
 UV         := $(VENV)/bin/uv
 
@@ -82,7 +82,7 @@ install:
 
 run:
 	$(ECHO) ">>> Running $(MAIN) $(CONFIG)"
-	$(DEF_ENV) $(PYTHON) $(MAIN) $(CONFIG)
+	$(DEF_ENV) $(UV) run $(PYTHON) $(MAIN) $(CONFIG)
 
 # ------------------------------------------------------------
 #  debug — launch the main script under pdb
